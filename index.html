@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Skincare Scatterplot — Category + Skin Type Filters</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #f6f7fb; margin: 24px; }
+    h1 { text-align: center; margin: 0 0 8px; }
+    .row { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
+    label { font-size: 14px; color: #333; }
+    select { padding: 6px 10px; border-radius: 8px; border: 1px solid #ccc; background: #fff; }
+    svg { background: #fff; border: 1px solid #ddd; border-radius: 8px; }
+    .axis path, .axis line { stroke: #bbb; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .legend .item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; }
+    .legend .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #999; }
+    .tooltip {
+      position: fixed; pointer-events: none; z-index: 10;
+      background: rgba(20,24,40,.95); color: #f2f4ff; padding: 8px 10px;
+      border: 1px solid #404868; border-radius: 8px; font-size: 12px;
+      transform: translate(10px, -10px); opacity: 0; transition: opacity .1s;
+      max-width: 320px; line-height: 1.3;
+    }
+  </style>
+</head>
+<body>
+
+      <!-- Page Title -->
+  <h1>Project 3 checkpoint</h1>
+  <p style="text-align:center; margin-top:4px; color:#555;">
+Interactive visualizations exploring skincare data
+</p>
+
+
+
+
+
+
+  
+
+    <h2 style="margin-bottom: 20px;">Price vs Rating</h2>
+    <p style="margin-top:0; color:#666; font-size:14px;">
+Explore how product prices and customer ratings vary across different categories and skin types.
+</p>
+    <div class="row">
+    <label>Category:
+      <select id="categorySelect"><option value="__all__">All</option></select>
+    </label>
+    <label>Skin Type:
+      <select id="skinSelect">
+        <option value="__all__">All</option>
+        <option value="Dry">Dry</option>
+        <option value="Normal">Normal</option>
+        <option value="Oily">Oily</option>
+        <option value="Combination">Combination</option>
+        <option value="Sensitive">Sensitive</option>
+      </select>
+    </label>
+  </div>
+
+  <svg id="chart" width="860" height="540"></svg>
+  <div class="legend" id="legend"></div>
+  <div class="tooltip" id="tooltip"></div>
+
+  <script>
+    const width = 860, height = 540, margin = {top: 30, right: 20, bottom: 56, left: 64};
+    const svg = d3.select("#chart").attr("width", width).attr("height", height);
+    const g = svg.append("g");
+
+    const xAxisG = g.append("g").attr("transform", `translate(0,${height - margin.bottom})`).attr("class","axis");
+    const yAxisG = g.append("g").attr("transform", `translate(${margin.left},0)`).attr("class","axis");
+    const pointsG = g.append("g").attr("class","points");
+
+    const tooltip = d3.select("#tooltip");
+    const categorySelect = d3.select("#categorySelect");
+    const skinSelect = d3.select("#skinSelect");
+    const legend = d3.select("#legend");
+
+    const x = d3.scaleLinear().range([margin.left, width - margin.right]);
+    const y = d3.scaleLinear().range([height - margin.bottom, margin.top]).domain([0,5]); // ratings 0–5
+    const color = d3.scaleOrdinal(d3.schemeTableau10);
+
+    const to01 = v => {
+      if (v === undefined || v === null) return 0;
+      const s = String(v).trim().toLowerCase();
+      return (s === "1" || s === "true" || s === "yes" || s === "y") ? 1 : (+v === 1 ? 1 : 0);
+    };
+
+    d3.csv("data/cosmetic_p.csv").then(rows => {
+      // parse
+      const data = rows.map(d => ({
+        brand: d.brand || d.Brand || "",
+        name: d.name || d.Product || d.product_name || "",
+        cat: d.Label || d.category || "Uncategorized",
+        price: +d.price,
+        rank: +d.rank,   // rating
+        Dry: to01(d.Dry),
+        Normal: to01(d.Normal),
+        Oily: to01(d.Oily),
+        Combination: to01(d.Combination),
+        Sensitive: to01(d.Sensitive)
+      })).filter(d => isFinite(d.price) && isFinite(d.rank));
+
+      // scales
+      x.domain(d3.extent(data, d => d.price)).nice();
+
+      // axes
+      const xAxis = d3.axisBottom(x).ticks(8).tickFormat(d3.format("$,.0f"));
+      const yAxis = d3.axisLeft(y).ticks(6);
+      xAxisG.call(xAxis)
+            .append("text")
+            .attr("x", width - margin.right)
+            .attr("y", 40).attr("fill","#222")
+            .attr("text-anchor","end").attr("font-weight","600")
+            .text("Price ($)");
+      yAxisG.call(yAxis)
+            .append("text")
+            .attr("x", 0).attr("y", margin.top - 12)
+            .attr("fill","#222").attr("text-anchor","start").attr("font-weight","600")
+            .text("Rating (0–5)");
+
+      // categories (legend + dropdown)
+      const cats = Array.from(new Set(data.map(d => d.cat))).sort();
+      color.domain(cats);
+      categorySelect.selectAll("option.cat")
+        .data(cats)
+        .join("option")
+        .attr("class","cat")
+        .attr("value", d => d)
+        .text(d => d);
+      legend.selectAll("span.item")
+        .data(cats)
+        .join("span")
+        .attr("class","item")
+        .html(d => `<span class="swatch" style="background:${color(d)}"></span> ${d}`);
+
+      function render() {
+        const selectedCat = categorySelect.node().value;
+        const selectedSkin = skinSelect.node().value;
+
+        let shown = selectedCat === "__all__" ? data : data.filter(d => d.cat === selectedCat);
+        if (selectedSkin !== "__all__") {
+          shown = shown.filter(d => d[selectedSkin] === 1);
+        }
+
+        const circles = pointsG.selectAll("circle").data(shown, d => d.brand + "|" + d.name + "|" + d.price);
+
+        circles.exit()
+          .transition().duration(150)
+          .attr("r", 0).remove();
+
+        circles.join(
+          enter => enter.append("circle")
+            .attr("cx", d => x(d.price))
+            .attr("cy", d => y(d.rank))
+            .attr("r", 0)
+            .attr("fill", d => color(d.cat))
+            .attr("opacity", 0.8)
+            .on("pointerenter", (e, d) => {
+              tooltip.html(`
+                <div style="font-weight:600">${(d.brand || "").trim()} ${(d.name ? "— " + d.name : "")}</div>
+                <div>${d.cat}</div>
+                <div><b>Price:</b> ${d3.format("$,.2f")(d.price)} &nbsp; • &nbsp; <b>Rating:</b> ${d.rank.toFixed(2)}</div>
+              `).style("opacity", 1);
+            })
+            .on("pointermove", (e) => {
+              tooltip.style("left", (e.clientX + 12) + "px")
+                     .style("top",  (e.clientY - 12) + "px");
+            })
+            .on("pointerleave", () => tooltip.style("opacity", 0))
+            .transition().duration(300)
+            .attr("r", 4.5),
+          update => update
+            .transition().duration(250)
+            .attr("cx", d => x(d.price))
+            .attr("cy", d => y(d.rank))
+            .attr("fill", d => color(d.cat))
+        );
+      }
+
+      categorySelect.on("change", render);
+      skinSelect.on("change", render);
+      render();
+    });
+  </script>
+
+
+
+
+
+
+
+
+  <h2 style="margin-top:40px;">Ingredients vs Rating</h2>
+  <p style="margin-top:0; color:#666; font-size:14px;">
+Analyze which ingredients are most common in high-rated skincare products.
+</p>
+<div class="row">
+  <label>Category:
+    <select id="ingCategory"><option value="__all__">All</option></select>
+  </label>
+  <label>Min # of products that include ingredient:
+    <input type="range" id="minCount" min="5" max="100" value="20" />
+    <span id="minCountVal">20</span>
+  </label>
+</div>
+<svg id="ingChart" width="860" height="540"></svg>
+<div class="tooltip" id="tooltip2"></div>
+
+<script>
+(() => {
+  const width = 860, height = 540, m = {top: 30, right: 20, bottom: 56, left: 200};
+  const svg = d3.select("#ingChart").attr("width", width).attr("height", height);
+  const g = svg.append("g");
+
+  // axes groups
+  const xAxisG = g.append("g").attr("transform", `translate(0,${height - m.bottom})`).attr("class","axis");
+  const yAxisG = g.append("g").attr("transform", `translate(${m.left},0)`).attr("class","axis");
+
+  const x = d3.scaleLinear().domain([0,5]).range([m.left, width - m.right]); // ratings 0–5
+  const y = d3.scaleBand().padding(0.15).range([m.top, height - m.bottom]);
+
+  const tooltip = d3.select("#tooltip2");
+  const catSel = d3.select("#ingCategory");
+  const minSlider = d3.select("#minCount");
+  const minVal = d3.select("#minCountVal");
+
+  // Basic ingredient parsing (kept independent from the first chart)
+  function cleanToken(token){
+    return token
+      .replace(/\(.*?\)/g, "")     // remove ( ... )
+      .replace(/\[.*?\]/g, "")     // remove [ ... ]
+      .replace(/[^a-zA-Z\s\-]/g,"")// keep letters/spaces/hyphens
+      .toLowerCase()
+      .trim()
+      .replace(/\s{2,}/g, " ");
+  }
+  function parseIngredients(s){
+    if(!s) return [];
+    return s.split(/,|;|\n/).map(cleanToken).filter(Boolean);
+  }
+
+  d3.csv("data/cosmetic_p.csv").then(rows => {
+    const data = rows.map(d => ({
+      brand: d.brand || d.Brand || "",
+      name: d.name || d.Product || d.product_name || "",
+      cat:  d.Label || d.category || "Uncategorized",
+      rank: +d.rank,
+      ingredients: parseIngredients(d.ingredients || d.Ingredients || d.INGREDIENTS || "")
+    })).filter(d => isFinite(d.rank));
+
+    // populate category select (independent)
+    const cats = Array.from(new Set(data.map(d => d.cat))).sort();
+    catSel.selectAll("option.cat")
+      .data(cats).join("option")
+      .attr("class","cat")
+      .attr("value", d => d).text(d => d);
+
+    function computeStats(){
+      const selectedCat = catSel.node().value;
+      const base = selectedCat === "__all__" ? data : data.filter(d => d.cat === selectedCat);
+
+      // ingredient -> {n, sum, examples[]}
+      const map = new Map();
+      for(const prod of base){
+        // Use a Set so a product only counts once per ingredient
+        const uniq = new Set(prod.ingredients);
+        for(const ing of uniq){
+          if(!map.has(ing)) map.set(ing, {ing, n:0, sum:0, examples:[]});
+          const rec = map.get(ing);
+          rec.n += 1;
+          rec.sum += prod.rank;
+          if(rec.examples.length < 2) rec.examples.push(prod.brand || prod.name);
+        }
+      }
+
+      let arr = Array.from(map.values());
+      const minN = +minSlider.node().value;
+      arr = arr.filter(d => d.n >= minN);
+      arr.forEach(d => d.avg = d.sum / d.n);
+
+      // Top 20 by average rating
+      arr.sort((a,b) => d3.descending(a.avg, b.avg));
+      return arr.slice(0, 20);
+    }
+
+    function render(){
+      minVal.text(minSlider.node().value);
+      const stats = computeStats();
+
+      y.domain(stats.map(d => d.ing));
+
+      xAxisG.call(d3.axisBottom(x).ticks(6));
+      yAxisG.call(d3.axisLeft(y).tickSize(0))
+            .selectAll("text").style("font-size","12px");
+
+      // Bars
+      const bars = g.selectAll("rect.bar").data(stats, d => d.ing);
+
+      bars.exit()
+        .transition().duration(200)
+        .attr("width", 0)
+        .remove();
+
+      bars.join(
+        enter => enter.append("rect")
+          .attr("class","bar")
+          .attr("x", x(0))
+          .attr("y", d => y(d.ing))
+          .attr("height", y.bandwidth())
+          .attr("width", 0)
+          .attr("fill", "#4c78a8")
+          .on("pointerenter", (e, d) => {
+            tooltip.html(
+              `<b>${d.ing.replace(/\\b[a-z]/g,c=>c.toUpperCase())}</b><br>` +
+              `Avg rating: ${d.avg.toFixed(2)}<br>` +
+              `Products: ${d.n}<br>` +
+              (d.examples.length ? `Examples: ${d.examples.join(", ")}` : "")
+            ).style("opacity", 1);
+          })
+          .on("pointermove", (e) => {
+            tooltip.style("left", (e.clientX + 12) + "px")
+                   .style("top",  (e.clientY - 12) + "px");
+          })
+          .on("pointerleave", () => tooltip.style("opacity", 0))
+          .transition().duration(300)
+          .attr("width", d => x(d.avg) - x(0)),
+        update => update
+          .transition().duration(250)
+          .attr("y", d => y(d.ing))
+          .attr("height", y.bandwidth())
+          .attr("width", d => x(d.avg) - x(0))
+      );
+
+      // Value labels
+      const labels = g.selectAll("text.value").data(stats, d => d.ing);
+      labels.exit().remove();
+      labels.join(
+        enter => enter.append("text")
+          .attr("class","value")
+          .attr("x", d => x(d.avg) + 6)
+          .attr("y", d => y(d.ing) + y.bandwidth()/2 + 4)
+          .attr("fill", "#333")
+          .text(d => d.avg.toFixed(2)),
+        update => update
+          .transition().duration(250)
+          .attr("x", d => x(d.avg) + 6)
+          .attr("y", d => y(d.ing) + y.bandwidth()/2 + 4)
+          .text(d => d.avg.toFixed(2))
+      );
+    }
+
+    catSel.on("change", render);
+    minSlider.on("input", render);
+    render();
+  });
+})();
+</script>
+
+
+
+
+</body>
+</html>
