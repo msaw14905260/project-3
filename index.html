@@ -528,5 +528,239 @@ Analyze which brands are most highly rated for skincare products.
 
 
 
+
+
+<!-- ===== Heatmap Explorer: Price × Rating ===== -->
+  <h2 style="margin-top:40px;">Price x Rating Heatmap</h2>
+  <p style="margin-top:0; color:#666; font-size:14px;">
+Visualize the relationship between product price and customer rating.
+</p>
+
+<div class="row">
+  <label>Category:
+    <select id="hmCategory"><option value="__all__">All</option></select>
+  </label>
+  <label>Skin Type:
+    <select id="hmSkin">
+      <option value="__all__">All</option>
+      <option value="Dry">Dry</option>
+      <option value="Normal">Normal</option>
+      <option value="Oily">Oily</option>
+      <option value="Combination">Combination</option>
+      <option value="Sensitive">Sensitive</option>
+    </select>
+  </label>
+  <label>Metric:
+    <select id="hmMetric">
+      <option value="count">Count</option>
+      <option value="avg">Avg Rating</option>
+    </select>
+  </label>
+  <label>Bin size:
+    <input id="hmBins" type="range" min="8" max="40" value="20">
+    <span id="hmBinsVal">20</span>
+  </label>
+</div>
+
+<svg id="heatmap" width="860" height="540"></svg>
+<div class="tooltip" id="hmTooltip"></div>
+
+<script>
+(() => {
+  const width = 860, height = 540, m = {top: 30, right: 20, bottom: 56, left: 64};
+  const svg = d3.select("#heatmap").attr("width", width).attr("height", height);
+  const g = svg.append("g");
+
+  const xAxisG = g.append("g").attr("transform", `translate(0,${height - m.bottom})`).attr("class","axis");
+  const yAxisG = g.append("g").attr("transform", `translate(${m.left},0)`).attr("class","axis");
+  const cellsG = g.append("g").attr("class","cells");
+
+  const x = d3.scaleLinear().range([m.left, width - m.right]);
+  const y = d3.scaleLinear().range([height - m.bottom, m.top]).domain([0,5]); // rating 0–5
+
+  const catSel  = d3.select("#hmCategory");
+  const skinSel = d3.select("#hmSkin");
+  const metricSel = d3.select("#hmMetric");
+  const binSlider = d3.select("#hmBins");
+  const binVal = d3.select("#hmBinsVal");
+  const tip = d3.select("#hmTooltip");
+
+  const to01 = v => {
+    if (v == null) return 0;
+    const s = String(v).trim().toLowerCase();
+    return (s === "1" || s === "true" || s === "yes" || s === "y") ? 1 : (+v === 1 ? 1 : 0);
+  };
+
+  d3.csv("data/cosmetic_p.csv").then(rows => {
+    const data = rows.map(d => ({
+      cat:   d.Label || d.category || "Uncategorized",
+      price: +d.price,
+      rank:  +d.rank,
+      Dry: to01(d.Dry), Normal: to01(d.Normal), Oily: to01(d.Oily),
+      Combination: to01(d.Combination), Sensitive: to01(d.Sensitive)
+    })).filter(d => isFinite(d.price) && isFinite(d.rank));
+
+    // scales
+    x.domain(d3.extent(data, d => d.price)).nice();
+
+    // axes with labels
+    xAxisG.call(d3.axisBottom(x).ticks(8).tickFormat(d3.format("$,.0f")))
+      .append("text")
+      .attr("x", width - m.right)
+      .attr("y", 40).attr("fill","#222").attr("text-anchor","end").attr("font-weight","600")
+      .text("Price ($)");
+    yAxisG.call(d3.axisLeft(y).ticks(6))
+      .append("text")
+      .attr("x", 0).attr("y", m.top - 12)
+      .attr("fill","#222").attr("text-anchor","start").attr("font-weight","600")
+      .text("Rating (0–5)");
+
+    // categories
+    const cats = Array.from(new Set(data.map(d => d.cat))).sort();
+    catSel.selectAll("option.cat")
+      .data(cats).join("option")
+      .attr("class","cat").attr("value", d => d).text(d => d);
+
+    // color scales for two metrics
+    const colorCount = d3.scaleSequential().interpolator(d3.interpolateBlues); // darker = more products
+    const colorAvg   = d3.scaleSequential().domain([3, 5]).interpolator(d3.interpolateYlGn); // greener = higher avg rating
+
+    function binData() {
+      const binsX = +binSlider.node().value; // number of bins across X
+      const binsY = Math.round(binsX * 0.5); // keep rectangular-ish cells
+
+      const xThresh = d3.range(binsX + 1).map(t => x.invert(m.left + t * ( (width - m.left - m.right) / binsX )));
+      const yThresh = d3.range(binsY + 1).map(t => y.invert( (height - m.bottom) - t * ( (height - m.bottom - m.top) / binsY ) ));
+
+      const selCat  = catSel.node().value;
+      const selSkin = skinSel.node().value;
+
+      let base = (selCat === "__all__") ? data : data.filter(d => d.cat === selCat);
+      if (selSkin !== "__all__") base = base.filter(d => d[selSkin] === 1);
+
+      // initialize empty grid
+      const grid = [];
+      for (let j = 0; j < binsY; j++) {
+        for (let i = 0; i < binsX; i++) {
+          grid.push({i, j, n:0, sum:0});
+        }
+      }
+
+      // put each product into a cell
+      const xMin = x.domain()[0], xMax = x.domain()[1];
+      const yMin = 0, yMax = 5;
+      const ix = v => Math.min(binsX - 1, Math.max(0, Math.floor( (v - xMin) / (xMax - xMin) * binsX )));
+      const iy = v => Math.min(binsY - 1, Math.max(0, Math.floor( (v - yMin) / (yMax - yMin) * binsY )));
+
+      for (const p of base) {
+        const ci = ix(p.price);
+        const cj = iy(p.rank);
+        const c  = grid[cj * binsX + ci];
+        c.n += 1;
+        c.sum += p.rank;
+      }
+
+      // domains for color
+      const maxN = d3.max(grid, d => d.n) || 1;
+      colorCount.domain([0, maxN]);      // automatically adapts to density
+      colorAvg.domain([3, 5]);           // fixed, highlights high-rating pockets
+
+      return { grid, binsX, binsY, maxN };
+    }
+
+    function render() {
+      binVal.text(binSlider.node().value);
+      const metric = metricSel.node().value; // 'count' | 'avg'
+      const { grid, binsX, binsY, maxN } = binData();
+
+      const cellW = (width - m.left - m.right) / binsX;
+      const cellH = (height - m.bottom - m.top) / binsY;
+
+      const rects = cellsG.selectAll("rect.cell").data(grid, d => d.i + "-" + d.j);
+
+      rects.exit().remove();
+
+      rects.join(
+        enter => enter.append("rect")
+          .attr("class", "cell")
+          .attr("x", d => m.left + d.i * cellW)
+          .attr("y", d => m.top + (binsY - 1 - d.j) * cellH) // invert y so higher rating is higher
+          .attr("width", cellW + 0.5)
+          .attr("height", cellH + 0.5)
+          .attr("fill", d => {
+            if (d.n === 0) return "#f3f4f7";
+            return metric === "count" ? colorCount(d.n) : colorAvg(d.sum / d.n);
+          })
+          .on("pointerenter", (e, d) => {
+            if (d.n === 0) return;
+            const avg = (d.sum / d.n).toFixed(2);
+            tip.html(metric === "count"
+              ? `<b>${d.n}</b> products in this bin`
+              : `Avg rating: <b>${avg}</b><br>Products: ${d.n}`
+            ).style("opacity", 1);
+          })
+          .on("pointermove", (e) => {
+            tip.style("left", (e.clientX + 12) + "px")
+               .style("top",  (e.clientY - 12) + "px");
+          })
+          .on("pointerleave", () => tip.style("opacity", 0)),
+        update => update
+          .attr("x", d => m.left + d.i * cellW)
+          .attr("y", d => m.top + (binsY - 1 - d.j) * cellH)
+          .attr("width", cellW + 0.5)
+          .attr("height", cellH + 0.5)
+          .transition().duration(200)
+          .attr("fill", d => {
+            if (d.n === 0) return "#f3f4f7";
+            return metric === "count" ? colorCount(d.n) : colorAvg(d.sum / d.n);
+          })
+      );
+
+      // simple legend (right-aligned)
+      svg.selectAll("g.hm-legend").remove();
+      const legend = svg.append("g").attr("class","hm-legend");
+      const lx = width - m.right - 160, ly = m.top - 10;
+
+      const gradId = "hmGrad" + Math.random().toString(36).slice(2);
+      const defs = svg.append("defs");
+      const grad = defs.append("linearGradient")
+        .attr("id", gradId).attr("x1","0%").attr("y1","0%").attr("x2","100%").attr("y2","0%");
+      const stops = d3.range(0, 1.01, 0.1).map(t => ({
+        t,
+        c: (metric === "count") ? colorCount(t * maxN) : colorAvg(3 + t * 2)
+      }));
+      grad.selectAll("stop")
+        .data(stops).enter().append("stop")
+        .attr("offset", d => (d.t*100)+"%")
+        .attr("stop-color", d => d.c);
+
+      legend.append("rect")
+        .attr("x", lx).attr("y", ly)
+        .attr("width", 140).attr("height", 10)
+        .attr("fill", `url(#${gradId})`)
+        .attr("stroke","#ccc");
+
+      legend.append("text").attr("x", lx).attr("y", ly - 6)
+        .text(metric === "count" ? "Count per bin" : "Avg rating").attr("font-size","12px").attr("fill","#444");
+
+      legend.append("text").attr("x", lx).attr("y", ly + 24)
+        .text(metric === "count" ? "0" : "3.0").attr("font-size","12px").attr("fill","#444");
+      legend.append("text").attr("x", lx + 140).attr("y", ly + 24)
+        .text(metric === "count" ? maxN : "5.0").attr("font-size","12px").attr("fill","#444");
+    }
+
+    catSel.on("change", render);
+    skinSel.on("change", render);
+    metricSel.on("change", render);
+    binSlider.on("input", render);
+
+    render();
+  });
+})();
+</script>
+
+
+
+
 </body>
 </html>
