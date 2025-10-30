@@ -226,20 +226,24 @@ Analyze which ingredients are most common in high-rated skincare products.
   const minSlider = d3.select("#minCount");
   const minVal = d3.select("#minCountVal");
 
-  // Basic ingredient parsing (kept independent from the first chart)
+  // Basic ingredient parsing
   function cleanToken(token){
     return token
-      .replace(/\(.*?\)/g, "")     // remove ( ... )
-      .replace(/\[.*?\]/g, "")     // remove [ ... ]
-      .replace(/[^a-zA-Z\s\-]/g,"")// keep letters/spaces/hyphens
+      .replace(/\(.*?\)/g, "") 
+      .replace(/\[.*?\]/g, "") 
+      .replace(/[^a-zA-Z\s\-]/g,"")
       .toLowerCase()
       .trim()
       .replace(/\s{2,}/g, " ");
   }
-  function parseIngredients(s){
-    if(!s) return [];
-    return s.split(/,|;|\n/).map(cleanToken).filter(Boolean);
-  }
+    function parseIngredients(s) {
+    if (s == null) return [];
+    return String(s)
+        .split(",")                // ONLY commas
+        .map(t => t.trim())
+        .filter(t => t.length > 0)
+        .map(t => t.toLowerCase());
+    }
 
   d3.csv("data/cosmetic_p.csv").then(rows => {
     const data = rows.map(d => ({
@@ -759,6 +763,295 @@ Visualize the relationship between product price and customer rating.
 })();
 </script>
 
+
+
+
+
+
+
+
+
+<!-- ===== Ingredient Popularity (Grouped Bars) ===== -->
+  <h2 style="margin-top:40px;">Ingredient Popularity</h2>
+  <p style="margin-top:0; color:#666; font-size:14px;">
+Analyze the relationship between ingredient usage and product count/ratings.
+</p>
+
+<div class="row">
+      </label>
+      <label>
+    <input id="ingFilter" type="text" placeholder="type to filter Ingredients" style="padding:6px 10px; border-radius:8px; border:1px solid #ccc; min-width:220px;">
+  </label>
+  <label>Metric:
+    <select id="gbMetric">
+      <option value="count">Count of products</option>
+      <option value="avg">Average rating</option>
+    </select>
+  </label>
+  <label>X-Axis:
+    <select id="gbXAxis">
+      <option value="category">Category</option>
+      <option value="priceTier">Price Tiers</option>
+    </select>
+</div>
+
+<div class="row" style="margin-top:10px;">
+    <label>
+    <select id="ingMulti" multiple size="8" style="width: 243px;"></select>
+  </label>
+</div>
+
+<svg id="ingBars" width="860" height="540"></svg>
+<div class="tooltip" id="ingBarsTip"></div>
+
+<script>
+(() => {
+  const width = 860, height = 540, m = {top: 30, right: 20, bottom: 80, left: 80};
+  const svg = d3.select("#ingBars").attr("width", width).attr("height", height);
+  const g = svg.append("g");
+
+  const x0 = d3.scaleBand().paddingInner(0.25).range([m.left, width - m.right]); // buckets
+  const x1 = d3.scaleBand().padding(0.15); // ingredients within bucket
+  const y  = d3.scaleLinear().range([height - m.bottom, m.top]);
+
+  const xAxisG = g.append("g").attr("transform", `translate(0,${height - m.bottom})`).attr("class","axis");
+  const yAxisG = g.append("g").attr("transform", `translate(${m.left},0)`).attr("class","axis");
+  const barsG  = g.append("g");
+  const legendG= g.append("g").attr("transform", `translate(${m.left}, ${m.top - 10})`);
+  const tip = d3.select("#ingBarsTip");
+
+  const color = d3.scaleOrdinal(d3.schemeTableau10);
+
+  // controls
+  const filterInput = d3.select("#ingFilter");
+  const ingSelect   = d3.select("#ingMulti");
+  const metricSel   = d3.select("#gbMetric");
+  const xSel        = d3.select("#gbXAxis");
+
+  // helpers
+  function cleanToken(token){
+    return String(token || "")
+      .replace(/\(.*?\)|\[.*?\]/g, "")
+      .replace(/[^a-zA-Z\s\-]/g,"")
+      .toLowerCase().trim()
+      .replace(/\s{2,}/g, " ");
+  }
+  function parseIngredients(s) {
+  if (s == null) return [];
+  return String(s)
+    .split(",")                // ONLY commas
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+    .map(t => t.toLowerCase());
+}
+  function titleCase(s){ return s.replace(/\b[a-z]/g, c => c.toUpperCase()); }
+
+  function quantileTiers(values){
+    const v = values.filter(d => isFinite(d)).sort(d3.ascending);
+    return { q33: d3.quantile(v, 1/3), q66: d3.quantile(v, 2/3) };
+  }
+  function tierForPrice(p, t){ return p<=t.q33 ? "Low" : (p<=t.q66 ? "Mid" : "High"); }
+
+  // state
+  let DATA = [];
+  let CATEGORIES = [];
+  let TIERS = null;
+  const PRICE_TIER = ["Low","Mid","High"];
+  let TOP_ING = []; // [{name, n}]
+  let currentOptions = []; // filtered list for select
+
+  // Build top-N ingredient list
+  function computeTopIngredients(data, N=200){
+    const map = new Map();
+    for(const d of data){
+      const uniq = new Set(d.ingredients);
+      for(const ing of uniq){
+        map.set(ing, (map.get(ing)||0) + 1);
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, n]) => ({name, n}))
+      .sort((a,b) => d3.descending(a.n, b.n))
+      .slice(0,N);
+  }
+
+  function populateSelect(list){
+    currentOptions = list;
+    const selected = new Set(Array.from(ingSelect.node().selectedOptions).map(o => o.value));
+    const opts = ingSelect.selectAll("option").data(list, d => d.name);
+    opts.exit().remove();
+    opts.enter().append("option")
+      .merge(opts)
+      .attr("value", d => d.name)
+      .property("selected", d => selected.has(d.name))
+      .text(d => `${titleCase(d.name)}  (${d.n})`);
+  }
+
+  function filterOptions(){
+    const q = filterInput.node().value.trim().toLowerCase();
+    const f = q ? TOP_ING.filter(d => d.name.includes(q)) : TOP_ING;
+    populateSelect(f);
+  }
+
+  function selectedIngredients(){
+    return Array.from(ingSelect.node().selectedOptions).map(o => o.value);
+  }
+
+  function aggregate(ingredients, mode){
+    // mode: 'category' | 'priceTier'
+    const metric = metricSel.node().value; // 'count' | 'avg'
+    const buckets = (mode === "category") ? CATEGORIES : PRICE_TIER;
+
+    // For each ingredient, compute per-bucket stats
+    const series = ingredients.map(ing => {
+      const vals = buckets.map(b => {
+        const subset = DATA.filter(d => {
+          const inBucket = (mode === "category") ? (d.cat === b) : (tierForPrice(d.price, TIERS) === b);
+          return inBucket && d.ingredientsSet.has(ing);
+        });
+        const n = subset.length;
+        const avg = n ? d3.mean(subset, d => d.rank) : NaN;
+        return { bucket: b, n, avg };
+      });
+      return { ingredient: ing, values: vals };
+    });
+
+    // y-domain
+    if (metric === "count") {
+      const maxN = d3.max(series.flatMap(s => s.values), d => d.n) || 1;
+      y.domain([0, maxN]).nice();
+    } else {
+      y.domain([0, 5]); // ratings
+    }
+
+    x0.domain(buckets);
+    x1.domain(ingredients).range([0, x0.bandwidth()]);
+
+    // axes + titles
+    xAxisG.call(d3.axisBottom(x0)).selectAll("text").style("font-size","12px").attr("transform","translate(0,0)");
+    yAxisG.call(d3.axisLeft(y).ticks(6));
+
+    xAxisG.selectAll("text.axis-title").remove();
+    yAxisG.selectAll("text.axis-title").remove();
+    xAxisG.append("text").attr("class","axis-title")
+      .attr("x", width - m.right).attr("y", 48).attr("fill","#222").attr("text-anchor","end").attr("font-weight","600")
+      .text(mode === "category" ? "Category" : "Price Tier");
+    yAxisG.append("text").attr("class","axis-title")
+      .attr("x", 0).attr("y", m.top - 12).attr("fill","#222").attr("text-anchor","start").attr("font-weight","600")
+      .text(metric === "count" ? "Products with ingredient" : "Average rating (0–5)");
+
+    // flat rows: one entry per (bucket, ingredient)
+    const flat = [];
+    for (const s of series) {
+      for (const v of s.values) {
+        flat.push({ ingredient: s.ingredient, bucket: v.bucket, n: v.n, avg: v.avg });
+      }
+    }
+
+    // draw bars
+    const bars = barsG.selectAll("rect.bar").data(flat, d => d.bucket + "|" + d.ingredient);
+    bars.exit().transition().duration(200).attr("y", y(0)).attr("height", 0).remove();
+
+    bars.join(
+      enter => enter.append("rect")
+        .attr("class","bar")
+        .attr("x", d => x0(d.bucket) + x1(d.ingredient))
+        .attr("y", d => y( metric === "count" ? d.n : (isFinite(d.avg) ? d.avg : 0) ))
+        .attr("width", x1.bandwidth())
+        .attr("height", d => (height - m.bottom) - y( metric === "count" ? d.n : (isFinite(d.avg) ? d.avg : 0) ))
+        .attr("fill", d => color(d.ingredient))
+        .on("pointerenter", (e,d) => {
+          const v = (metric === "count")
+            ? `Products: <b>${d.n}</b>`
+            : `Avg rating: <b>${isFinite(d.avg) ? d.avg.toFixed(2) : "—"}</b> (n=${d.n})`;
+          tip.html(`${titleCase(d.ingredient)}<br>${mode === "category" ? "Category" : "Tier"}: ${d.bucket}<br>${v}`)
+             .style("opacity", 1);
+        })
+        .on("pointermove", (e) => tip.style("left", (e.clientX + 12) + "px").style("top", (e.clientY - 12) + "px"))
+        .on("pointerleave", () => tip.style("opacity", 0)),
+      update => update
+        .transition().duration(250)
+        .attr("x", d => x0(d.bucket) + x1(d.ingredient))
+        .attr("y", d => y( metric === "count" ? d.n : (isFinite(d.avg) ? d.avg : 0) ))
+        .attr("width", x1.bandwidth())
+        .attr("height", d => (height - m.bottom) - y( metric === "count" ? d.n : (isFinite(d.avg) ? d.avg : 0) ))
+        .attr("fill", d => color(d.ingredient))
+    );
+
+    // legend chips (click to deselect)
+    const picks = legendG.selectAll("g.pill").data(ingredients, d => d);
+    picks.exit().remove();
+    const pillEnter = picks.enter().append("g").attr("class","pill").style("cursor","pointer")
+      .on("click", (_,name) => {
+        // unselect in <select>
+        const options = Array.from(ingSelect.node().options);
+        options.forEach(o => { if (o.value === name) o.selected = false; });
+        render();
+      });
+    pillEnter.append("rect").attr("rx",10).attr("ry",10).attr("height",18).attr("fill","#eef3ff").attr("stroke","#cdd9ff");
+    pillEnter.append("circle").attr("r",5).attr("cy",9);
+    pillEnter.append("text").attr("y",13).attr("font-size",12).attr("fill","#333");
+
+    const merged = pillEnter.merge(picks);
+    merged.select("circle").attr("cx", 9).attr("fill", d => color(d));
+    merged.select("text").text(d => " " + titleCase(d)).attr("x", 18);
+
+    let xCursor = 0;
+    merged.each(function(d){
+      const t = d3.select(this).select("text");
+      const w = t.node().getComputedTextLength() + 28;
+      d3.select(this).attr("transform", `translate(${m.left + xCursor}, ${m.top - 24})`);
+      d3.select(this).select("rect").attr("width", w);
+      xCursor += w + 8;
+    });
+  }
+
+  function render(){
+    const chosen = selectedIngredients();
+    const mode = xSel.node().value; // 'category' | 'priceTier'
+    barsG.selectAll("*").interrupt(); // smooth updates
+    if (chosen.length === 0) {
+      // Draw axes only
+      x0.domain(mode === "category" ? CATEGORIES : PRICE_TIER);
+      xAxisG.call(d3.axisBottom(x0));
+      y.domain([0,5]).nice();
+      yAxisG.call(d3.axisLeft(y));
+      barsG.selectAll("*").remove();
+      legendG.selectAll("*").remove();
+      return;
+    }
+    aggregate(chosen, mode);
+  }
+
+  // init
+  d3.csv("data/cosmetic_p.csv").then(rows => {
+    const raw = rows.map(d => ({
+      cat: d.Label || d.category || "Uncategorized",
+      price: +d.price,
+      rank: +d.rank,
+      ingredients: parseIngredients(d.ingredients || d.Ingredients || d.INGREDIENTS || "")
+    })).filter(d => isFinite(d.rank) && isFinite(d.price));
+
+    raw.forEach(d => d.ingredientsSet = new Set(d.ingredients));
+    DATA = raw;
+    CATEGORIES = Array.from(new Set(DATA.map(d => d.cat))).sort();
+    TIERS = quantileTiers(DATA.map(d => d.price));
+    TOP_ING = computeTopIngredients(DATA, 200);
+    populateSelect(TOP_ING);
+
+    // events
+    filterInput.on("input", () => filterOptions());
+    ingSelect.on("change", render);
+    metricSel.on("change", render);
+    xSel.on("change", render);
+
+    // seed with two common ingredients (selected)
+    const seeds = TOP_ING.slice(0,2).map(d => d.name);
+    Array.from(ingSelect.node().options).forEach(o => { if (seeds.includes(o.value)) o.selected = true; });
+    render();
+  });
+})();
+</script>
 
 
 
