@@ -226,24 +226,19 @@ Analyze which ingredients are most common in high-rated skincare products.
   const minSlider = d3.select("#minCount");
   const minVal = d3.select("#minCountVal");
 
-  // Basic ingredient parsing
-  function cleanToken(token){
-    return token
-      .replace(/\(.*?\)/g, "") 
-      .replace(/\[.*?\]/g, "") 
-      .replace(/[^a-zA-Z\s\-]/g,"")
-      .toLowerCase()
-      .trim()
-      .replace(/\s{2,}/g, " ");
-  }
-    function parseIngredients(s) {
-    if (s == null) return [];
-    return String(s)
-        .split(",")                // ONLY commas
-        .map(t => t.trim())
-        .filter(t => t.length > 0)
-        .map(t => t.toLowerCase());
-    }
+    // Helpers
+function titleCase(s){ return s.replace(/\b[a-z]/g, c => c.toUpperCase()); }
+
+// Strict CSV-style ingredient parser: split ONLY on commas.
+function parseIngredients(s){
+  if (s == null) return [];
+  return String(s)
+    .split(",")                 // ONLY commas
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+    .map(t => t.toLowerCase());
+}
+
 
   d3.csv("data/cosmetic_p.csv").then(rows => {
     const data = rows.map(d => ({
@@ -828,23 +823,19 @@ Analyze the relationship between ingredient usage and product count/ratings.
   const metricSel   = d3.select("#gbMetric");
   const xSel        = d3.select("#gbXAxis");
 
-  // helpers
-  function cleanToken(token){
-    return String(token || "")
-      .replace(/\(.*?\)|\[.*?\]/g, "")
-      .replace(/[^a-zA-Z\s\-]/g,"")
-      .toLowerCase().trim()
-      .replace(/\s{2,}/g, " ");
-  }
-  function parseIngredients(s) {
+    // Helpers
+function titleCase(s){ return s.replace(/\b[a-z]/g, c => c.toUpperCase()); }
+
+// Strict CSV-style ingredient parser: split ONLY on commas.
+function parseIngredients(s){
   if (s == null) return [];
   return String(s)
-    .split(",")                // ONLY commas
+    .split(",")                 // ONLY commas
     .map(t => t.trim())
     .filter(t => t.length > 0)
     .map(t => t.toLowerCase());
 }
-  function titleCase(s){ return s.replace(/\b[a-z]/g, c => c.toUpperCase()); }
+
 
   function quantileTiers(values){
     const v = values.filter(d => isFinite(d)).sort(d3.ascending);
